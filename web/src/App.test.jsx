@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import App from './App.jsx';
 
@@ -62,6 +62,49 @@ describe('App', () => {
     render(<App address="0xabc123" />);
 
     expect(await screen.findByText('ETH')).toBeInTheDocument();
-    expect(screen.getByText(/price unavailable/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/price unavailable/i)).toHaveLength(2);
+  });
+
+  test('does not replace the current wallet with a stale response', async () => {
+    let resolveFirst;
+    let resolveSecond;
+    global.fetch = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+
+    const { rerender } = render(<App address="0xfirst" />);
+    rerender(<App address="0xsecond" />);
+
+    await act(async () => {
+      resolveSecond({
+        ok: true,
+        json: async () => ({ address: '0xsecond', tokens: [{ symbol: 'NEW', chain: 'test', amount: 1, price_available: false }], total_usd: 0 })
+      });
+    });
+    await act(async () => {
+      resolveFirst({
+        ok: true,
+        json: async () => ({ address: '0xfirst', tokens: [{ symbol: 'OLD', chain: 'test', amount: 1, price_available: false }], total_usd: 0 })
+      });
+    });
+
+    expect(await screen.findByText('NEW')).toBeInTheDocument();
+    expect(screen.queryByText('OLD')).not.toBeInTheDocument();
+  });
+
+  test('starts a new wallet request in the loading state and clears previous errors', async () => {
+    mockFetch({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: { code: 'wallet_not_found', message: 'Wallet not found' } })
+    });
+    const { rerender } = render(<App address="0xmissing" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wallet not found');
+
+    global.fetch = vi.fn(() => new Promise(() => {}));
+    rerender(<App address="0xabc123" />);
+
+    expect(await screen.findByText(/loading portfolio/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

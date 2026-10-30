@@ -46,6 +46,17 @@ func TestPortfolioUnknownWalletStatus(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d with body %q", rr.Code, rr.Body.String())
 	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("expected JSON error body: %v", err)
+	}
+	if body.Error.Code != "wallet_not_found" {
+		t.Fatalf("unexpected error body: %+v", body.Error)
+	}
 }
 
 func TestPortfolioSuccessShape(t *testing.T) {

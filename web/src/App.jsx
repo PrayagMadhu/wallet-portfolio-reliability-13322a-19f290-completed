@@ -7,24 +7,37 @@ function money(value) {
 export default function App({ address = '0xabc123' }) {
   const [portfolio, setPortfolio] = useState(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
 
     async function load() {
+      setLoading(true);
+      setError('');
+      setPortfolio(null);
       try {
-        const response = await fetch(`/api/wallets/${address}/portfolio`);
-        const body = await response.json();
+        const response = await fetch(`/api/wallets/${address}/portfolio`, {
+          signal: controller.signal
+        });
+        const body = await response.json().catch(() => null);
         if (!response.ok) {
-          throw new Error('Unable to load portfolio');
+          throw new Error(body?.error?.message || 'Unable to load portfolio');
+        }
+        if (!body || typeof body.address !== 'string' || !Array.isArray(body.tokens)) {
+          throw new Error('Invalid portfolio response');
         }
         if (!cancelled) {
           setPortfolio(body);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && err.name !== 'AbortError') {
           setError(err.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
         }
       }
     }
@@ -32,10 +45,11 @@ export default function App({ address = '0xabc123' }) {
     load();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [address]);
 
-  if (loading) {
+  if (loading || (portfolio && portfolio.address !== address.trim().toLowerCase())) {
     return <main><p>Loading portfolio...</p></main>;
   }
 
@@ -44,7 +58,7 @@ export default function App({ address = '0xabc123' }) {
   }
 
   if (!portfolio) {
-    return <main />;
+    return <main><p>Loading portfolio...</p></main>;
   }
 
   if (portfolio.tokens.length === 0) {
@@ -69,8 +83,8 @@ export default function App({ address = '0xabc123' }) {
             <tr key={`${token.chain}-${token.symbol}`}>
               <td>{token.symbol}</td>
               <td>{token.amount}</td>
-              <td>{money(token.price_usd)}</td>
-              <td>{money(token.value_usd)}</td>
+              <td>{token.price_available ? money(token.price_usd) : 'Price unavailable'}</td>
+              <td>{token.price_available ? money(token.value_usd) : 'Price unavailable'}</td>
             </tr>
           ))}
         </tbody>

@@ -128,6 +128,65 @@ func TestSummaryUsesCachedPricesOnRepeatedRequest(t *testing.T) {
 	}
 }
 
+func TestConcurrentSummariesSharePriceLookup(t *testing.T) {
+	sp := &scriptProvider{
+		balances: []models.TokenBalance{{Symbol: "ETH", Name: "Ethereum", Chain: "ethereum", Amount: 1}},
+		prices:   map[string]float64{"ETH": 3000},
+		delays:   map[string]time.Duration{"ETH": 25 * time.Millisecond},
+		fails:    map[string]error{},
+	}
+	svc := NewPortfolioService(sp, cache.NewTTLCache(30*time.Second))
+
+	const requests = 12
+	start := make(chan struct{})
+	errs := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			got, err := svc.Summary(context.Background(), "0xabc123")
+			if err == nil && got.TotalUSD != 3000 {
+				err = errors.New("unexpected portfolio total")
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Summary returned error: %v", err)
+		}
+	}
+	if sp.count("ETH") != 1 {
+		t.Fatalf("expected one shared provider price call, got %d", sp.count("ETH"))
+	}
+}
+
+func TestSummaryLooksUpDifferentPricesInParallel(t *testing.T) {
+	sp := &scriptProvider{
+		balances: []models.TokenBalance{
+			{Symbol: "ETH", Name: "Ethereum", Chain: "ethereum", Amount: 1},
+			{Symbol: "SOL", Name: "Solana", Chain: "solana", Amount: 1},
+		},
+		prices: map[string]float64{"ETH": 3000, "SOL": 100},
+		delays: map[string]time.Duration{"ETH": 30 * time.Millisecond, "SOL": 30 * time.Millisecond},
+		fails:  map[string]error{},
+	}
+	svc := NewPortfolioService(sp, cache.NewTTLCache(30*time.Second))
+
+	if _, err := svc.Summary(context.Background(), "0xabc123"); err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+	if sp.maxSeen < 2 {
+		t.Fatalf("expected parallel price calls, maximum in flight was %d", sp.maxSeen)
+	}
+}
+
 func TestInvalidAddress(t *testing.T) {
 	sp := &scriptProvider{}
 	svc := NewPortfolioService(sp, cache.NewTTLCache(30*time.Second))
